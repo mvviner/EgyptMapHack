@@ -7,6 +7,7 @@ using System.Linq;
 using System.Runtime.Serialization;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using System.Drawing.Drawing2D;
 
 namespace EgyptMapHack {
     public partial class Form1 : Form {
@@ -36,18 +37,18 @@ namespace EgyptMapHack {
         }
         private void ShowLatestFile() {
             try {
-                string AutosavePath = Path.Combine(DirectoryPath, "autosave.json");
                 bool update = false;
                 foreach (string s in Directory.GetFiles(DirectoryPath, "*.json")) {
                     string s1 = Path.GetFileNameWithoutExtension(s);
-                    s1 = s1.Contains("autosave") ? Directory.GetLastWriteTime(s).ToString("yyyyMMddHHmmss") + s1 : s1;
-                    if (s1 != "save_map" && (CurrentFilename == null || CurrentFilename.CompareTo(s1) < 0)) {
+                    s1 = s1.IndexOf("autosave", StringComparison.CurrentCultureIgnoreCase) >= 0 ? Directory.GetLastWriteTime(s).ToString("yyyyMMddHHmmss") + s1 : s1;
+                    if (s1.IndexOf("save_map", StringComparison.CurrentCultureIgnoreCase) < 0 && (CurrentFilename == null || CurrentFilename.CompareTo(s1) < 0)) {
                         CurrentFilename = s1;
                         update = true;
                     }
                 }
                 if (!update) return;
-                string json = File.ReadAllText(Path.Combine(DirectoryPath, (CurrentFilename.Contains("autosave") ? CurrentFilename.Substring(14) : CurrentFilename) + ".json"));
+                string Filename = Path.Combine(DirectoryPath, (CurrentFilename.IndexOf("autosave", StringComparison.CurrentCultureIgnoreCase) >= 0 ? CurrentFilename.Substring(14) : CurrentFilename) + ".json");
+                string json = File.ReadAllText(Filename);
                 CurrentSave = JsonConvert.DeserializeObject<EgyptSave>(json);
                 Refresh();
             } catch (Exception ex) {
@@ -91,7 +92,13 @@ namespace EgyptMapHack {
                 //    g.DrawEllipse(Pens.Blue, center.X + cell.X * coef - coef, center.Y - cell.Y * coef - coef, coef * 2, coef * 2);
                 //if (cell.CellTypeId == "e_cities")
                 //    g.DrawEllipse(Pens.Brown, center.X + cell.X * coef - coef, center.Y - cell.Y * coef - coef, coef * 2, coef * 2);
-                bool RaidWarning = raiding && ((TurnsToWait == 1 && cell.WorkersCount > 0) || (TurnsToWait == 0 && cell.WorkersCount == 0));
+                bool CannotRaidWarning = raiding && TurnsToWait > 0 && cell.WorkersCount > 0 && cell.Tasks[0].Complexity - cell.Tasks[0].Progress == 1;
+                bool ShouldRaidWarning = raiding && TurnsToWait == 0 && cell.WorkersCount == 0;
+                bool ScoutWarning = exploring && TurnsToExplore <= 0 && cell.WorkersCount > 0;
+                if (CannotRaidWarning || ScoutWarning)
+                    g.DrawEllipse(new Pen(Color.Red, 2), center.X + cell.X * coef - coef, center.Y - cell.Y * coef - coef, coef * 2, coef * 2);
+                if (ShouldRaidWarning)
+                    g.DrawEllipse(new Pen(Color.Blue, 2), center.X + cell.X * coef - coef, center.Y - cell.Y * coef - coef, coef * 2, coef * 2);
                 g.DrawString((TurnsToExplore <= 0 ? ressymbol : TurnsToExplore.ToString() + (ressymbol == "-" ? "" : "/" + ressymbol)) + (TurnsToWait <= 0 ? "" : TurnsToWait.ToString()),
                     Font, Brushes.Black, center.X + cell.X * coef - size.Width / 2, center.Y - cell.Y * coef - size.Height / 2);
                 TotalTurnsToExplore += TurnsToExplore;
