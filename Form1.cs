@@ -3,36 +3,52 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 using System.IO;
+using System.Linq;
+using System.Runtime.Serialization;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace EgyptMapHack {
     public partial class Form1 : Form {
         private string CurrentFilename = null;
         private EgyptSave CurrentSave = null;
-        private string DirectoryPath = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) + @"\..\LocalLow\Clarus Victoria\Pre-Civilization Egypt\saves";
+        private string DirectoryPath;
+        private Timer Timer = new Timer();
         public Form1() {
             InitializeComponent();
-            ShowLatestFile();
+            DirectoryPath = Environment.CurrentDirectory;
+            if (!File.Exists(Path.Combine(DirectoryPath, "save_map.json")))
+                DirectoryPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"..\LocalLow\Clarus Victoria\Predynastic Egypt\saves");
             try {
-                FileSystemWatcher fsw = new FileSystemWatcher(DirectoryPath, "*.json");
-                fsw.SynchronizingObject = this;
-                fsw.Created += File_Created;
+                ShowLatestFile();
+                Timer.Tick += (sender, e) => ShowLatestFile();
+                FileSystemWatcher fsw = new FileSystemWatcher(DirectoryPath, "*.json") { SynchronizingObject = this };
+                fsw.Created += (sender, e) => StartTimer();
+                fsw.Changed += (sender, e) => StartTimer();
                 fsw.EnableRaisingEvents = true;
             } catch (Exception ex) {
                 MessageBox.Show(ex.Message + ex.StackTrace);
             }
         }
-        private void File_Created(object sender, FileSystemEventArgs e) {
-            if (e.Name != "save_map.json") ShowLatestFile();
+        private void StartTimer() {
+            Timer.Interval = 1000;
+            Timer.Enabled = true;
         }
         private void ShowLatestFile() {
             try {
-                string name = null;
-                foreach (string s in Directory.GetFiles(DirectoryPath, "*.json"))
-                    if (!s.Contains("save_map") && !s.Contains("autosave") && (name == null || name.CompareTo(s) < 0)) name = s;
-                if (name == null || name == CurrentFilename) return;
-                CurrentFilename = name;
-                string json = File.ReadAllText(name);
-                CurrentSave = Newtonsoft.Json.JsonConvert.DeserializeObject<EgyptSave>(json);
+                string AutosavePath = Path.Combine(DirectoryPath, "autosave.json");
+                bool update = false;
+                foreach (string s in Directory.GetFiles(DirectoryPath, "*.json")) {
+                    string s1 = Path.GetFileNameWithoutExtension(s);
+                    s1 = s1.Contains("autosave") ? Directory.GetLastWriteTime(s).ToString("yyyyMMddHHmmss") + s1 : s1;
+                    if (s1 != "save_map" && (CurrentFilename == null || CurrentFilename.CompareTo(s1) < 0)) {
+                        CurrentFilename = s1;
+                        update = true;
+                    }
+                }
+                if (!update) return;
+                string json = File.ReadAllText(Path.Combine(DirectoryPath, (CurrentFilename.Contains("autosave") ? CurrentFilename.Substring(14) : CurrentFilename) + ".json"));
+                CurrentSave = JsonConvert.DeserializeObject<EgyptSave>(json);
                 Refresh();
             } catch (Exception ex) {
                 MessageBox.Show(ex.Message + ex.StackTrace);
@@ -47,26 +63,88 @@ namespace EgyptMapHack {
             if (CurrentSave == null) return;
             PointF center = new PointF(ClientSize.Width / 4, ClientSize.Height / 2);
             float coef = Math.Min(ClientSize.Width / 2, ClientSize.Height / 2) * 0.038f;
-            DrawMap(e.Graphics, center, coef, 1, CurrentSave.City);
-            DrawMap(e.Graphics, new PointF(center.X * 3, center.Y), coef, 2, CurrentSave.Egypt);
+            int TotalTurnsToExplore = 0;
+            int WorkersScouting = 0;
+            DrawMap(e.Graphics, center, coef, 1, CurrentSave.City, ref TotalTurnsToExplore, ref WorkersScouting);
+            DrawMap(e.Graphics, new PointF(center.X * 3, center.Y), coef, 2, CurrentSave.Egypt, ref TotalTurnsToExplore, ref WorkersScouting);
+            TotalTurnsToExploreLabel.Text = "Total turns to explore: " + TotalTurnsToExplore;
+            WorkersScoutingLabel.Text = "Workers scouting: " + WorkersScouting;
         }
-        private void DrawMap(Graphics g, PointF center, float coef, float ratio, Map Map) {
-            g.DrawRectangle(Pens.Black, center.X - 12.5f * coef, center.Y - 12.5f * coef * ratio, coef * 25, coef * 25 * ratio);
+        private void DrawMap(Graphics g, PointF center, float coef, float ratio, Map Map, ref int TotalTurnsToExplore, ref int WorkersScouting) {
+            g.DrawRectangle(Pens.Black, center.X - 13 * coef, center.Y - 13 * coef * ratio, coef * 26, coef * 26 * ratio);
             foreach (var cell in Map.Cells) {
                 string cultres = cell.CultResourceId;
-                string ressymbol = "-";
-                foreach (var res in CurrentSave.CultResources)
-                    if (res.ID == cultres)
-                        ressymbol = (res.IncomeResourceId).Substring(0, 1);
-                g.DrawString(ressymbol, Font, cell.IsExplored ? Brushes.DarkCyan : Brushes.Black, center.X + cell.X * coef, center.Y - cell.Y * coef);
+                string ressymbol = (from res in CurrentSave.CultResources where res.ID == cultres select res.IncomeResourceId.Substring(0, 1)).FirstOrDefault() ?? "-";
+                bool exploring = cell.Tasks.Count > 0 && cell.Tasks[0].FinalEventId == "!explore_manager";
+                bool raiding = cell.Tasks.Count > 0 && cell.Tasks[0].FinalEventId == "tribe_raid_final";
+                int PlunderTurnNumber;
+                int TurnsToWait = CurrentSave.AllEvents.map.globals.Plundered.TryGetValue(cell.TribeNumber, out PlunderTurnNumber)
+                    ? PlunderTurnNumber + 10 - CurrentSave.Turn - (!raiding ? 5 : cell.Tasks[0].Complexity - cell.Tasks[0].Progress) : 0;
+                int TurnsToExplore = !exploring ? 0 : (int)Math.Floor(cell.Tasks[0].Complexity * (AcceleratedExploration.Checked && CurrentSave.AllEvents.map.globals.explorationComplexityMod > 0.5f ? 0.5f : 1)) - cell.Tasks[0].Progress;
+                var Borders = cell.Borders.Select(p => new PointF(center.X + (cell.X + p.x) * coef, center.Y - (cell.Y + p.y) * coef)).ToArray();
+                var size = g.MeasureString(ressymbol, Font);
+                if (cell.IsExplored)
+                    g.FillEllipse(Brushes.LightGreen, center.X + cell.X * coef - coef, center.Y - cell.Y * coef - coef, coef * 2, coef * 2);
+                if (!cell.IsExplored && cell.Tasks.Count > 0 && cell.Tasks[0].FinalEventId == "!explore_manager")
+                    g.FillEllipse(Brushes.LightCyan, center.X + cell.X * coef - coef, center.Y - cell.Y * coef - coef, coef * 2, coef * 2);
+                //if (cell.CellTypeId == "e_sea" || cell.CellTypeId == "n_river")
+                //    g.DrawEllipse(Pens.Blue, center.X + cell.X * coef - coef, center.Y - cell.Y * coef - coef, coef * 2, coef * 2);
+                //if (cell.CellTypeId == "e_cities")
+                //    g.DrawEllipse(Pens.Brown, center.X + cell.X * coef - coef, center.Y - cell.Y * coef - coef, coef * 2, coef * 2);
+                bool RaidWarning = raiding && ((TurnsToWait == 1 && cell.WorkersCount > 0) || (TurnsToWait == 0 && cell.WorkersCount == 0));
+                g.DrawString((TurnsToExplore <= 0 ? ressymbol : TurnsToExplore.ToString() + (ressymbol == "-" ? "" : "/" + ressymbol)) + (TurnsToWait <= 0 ? "" : TurnsToWait.ToString()),
+                    Font, Brushes.Black, center.X + cell.X * coef - size.Width / 2, center.Y - cell.Y * coef - size.Height / 2);
+                TotalTurnsToExplore += TurnsToExplore;
+                WorkersScouting += exploring ? cell.WorkersCount : 0;
             }
+        }
+        private void AcceleratedExploration_CheckedChanged(object sender, EventArgs e) {
+            Refresh();
         }
     }
     public class Cell {
+        public string CellTypeId { get; set; }
         public string CultResourceId { get; set; }
         public bool IsExplored { get; set; }
         public float X { get; set; }
         public float Y { get; set; }
+        public int TribeNumber { get; set; }
+        public int WorkersCount { get; set; }
+        public List<CellTask> Tasks { get; set; }
+        public List<BorderPoint> Borders { get; set; }
+        public override string ToString() => $"{TribeNumber}";
+    }
+    public class AllEventsNode {
+        public AllEventsMapNode map { get; set; }
+    }
+    public class AllEventsMapNode {
+        public AllEventsMapGlobalsNode globals { get; set; }
+    }
+    public class AllEventsMapGlobalsNode {
+        public JObject Globals { get; set; }
+        public Dictionary<int, int> Plundered { get; set; } = new Dictionary<int, int>();
+        public float explorationComplexityMod { get; set; } = 1;
+        [OnDeserialized]
+        private void OnDeserialized(StreamingContext context) {
+            foreach (var prop in Globals.Properties())
+                if (prop.Name.StartsWith("plundered_")) {
+                    int key = int.Parse(prop.Name.Substring(10));
+                    int value = (int)(double)((JValue)prop.Value["value"]).Value;
+                    Plundered.Add(key, value);
+                } else if (prop.Name == "explorationComplexityMod")
+                    explorationComplexityMod = (float)(double)((JValue)prop.Value["value"]).Value;
+        }
+    }
+    public class CellTask {
+        public int Capacity { get; set; }
+        public int Complexity { get; set; }
+        public int Progress { get; set; }
+        public string FinalEventId { get; set; } // "!explore_manager", "tribe_base_final", "tribe_raid_final"
+    }
+    public class BorderPoint {
+        public float x { get; set; }
+        public float y { get; set; }
+        public override string ToString() => $"{x}, {y}";
     }
     public class CultResource {
         public string ID { get; set; }
@@ -76,8 +154,10 @@ namespace EgyptMapHack {
         public List<Cell> Cells { get; set; }
     }
     public class EgyptSave {
+        public int Turn { get; set; }
         public Map City { get; set; }
         public Map Egypt { get; set; }
         public List<CultResource> CultResources { get; set; }
+        public AllEventsNode AllEvents { get; set; }
     }
 }
