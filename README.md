@@ -19,6 +19,7 @@ Features:
 6. Shows the number of turns (after the tribe resource symbol) needed to recharge your award for tribe robbery.
 7. If your raid is about to complete next turn, but the award is not recharged yet, the area is marked by red circle. You probably should remove a worker from here.
 8. If you are raiding a tribe and the reward is fully recharged, the area is marked by blue circle. You probably should assign a worker here.
+
 ------
 Installation
 ------
