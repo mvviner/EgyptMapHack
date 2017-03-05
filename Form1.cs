@@ -10,7 +10,7 @@ using Newtonsoft.Json.Linq;
 
 namespace EgyptMapHack {
     public partial class Form1 : Form {
-        private string CurrentFilename = null;
+        private FileInfo CurrentFile = null;
         private EgyptSave CurrentSave = null;
         private string DirectoryPath;
         private Timer Timer = new Timer();
@@ -35,19 +35,17 @@ namespace EgyptMapHack {
             Timer.Enabled = true;
         }
         private void ShowLatestFile() {
-            try {
+            try
+            {
                 bool update = false;
-                foreach (string s in Directory.GetFiles(DirectoryPath, "*.json")) {
-                    string s1 = Path.GetFileNameWithoutExtension(s);
-                    s1 = s1.IndexOf("autosave", StringComparison.CurrentCultureIgnoreCase) >= 0 ? Directory.GetLastWriteTime(s).ToString("yyyyMMddHHmmss") + s1 : s1;
-                    if (s1.IndexOf("save_map", StringComparison.CurrentCultureIgnoreCase) < 0 && (CurrentFilename == null || CurrentFilename.CompareTo(s1) < 0)) {
-                        CurrentFilename = s1;
-                        update = true;
-                    }
+                var latestFile = new DirectoryInfo(DirectoryPath).GetFiles("*.json").Where(x => x.FullName.IndexOf("save_map") == -1).OrderByDescending(x => x.LastWriteTimeUtc).First();
+                if (CurrentFile == null || CurrentFile.LastWriteTimeUtc < latestFile.LastWriteTimeUtc)
+                {
+                    CurrentFile = latestFile;
+                    update = true;
                 }
                 if (!update) return;
-                string Filename = Path.Combine(DirectoryPath, (CurrentFilename.IndexOf("autosave", StringComparison.CurrentCultureIgnoreCase) >= 0 ? CurrentFilename.Substring(14) : CurrentFilename) + ".json");
-                string json = File.ReadAllText(Filename);
+                string json = File.ReadAllText(CurrentFile.FullName);
                 CurrentSave = JsonConvert.DeserializeObject<EgyptSave>(json);
                 Refresh();
             } catch (IOException) {
